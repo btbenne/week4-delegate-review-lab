@@ -26,12 +26,26 @@ from datetime import datetime
 DATA_FILE = os.environ.get("TASK_TRACKER_FILE", "tasks.json")
 
 
+class TaskTrackerError(Exception):
+    """Raised for problems the user can understand and fix, like a
+    corrupted data file. Callers decide how to report these."""
+
+
 def load_tasks():
-    """Load the task list from the JSON data file."""
+    """Load the task list from the JSON data file.
+
+    Raises TaskTrackerError if the file exists but isn't valid JSON.
+    """
     if not os.path.exists(DATA_FILE):
         return []
     with open(DATA_FILE, "r") as f:
-        return json.load(f)
+        try:
+            return json.load(f)
+        except json.JSONDecodeError as e:
+            raise TaskTrackerError(
+                f"{DATA_FILE} is corrupted and could not be read "
+                f"({e.msg} at line {e.lineno}, column {e.colno})."
+            ) from e
 
 
 def save_tasks(tasks):
@@ -46,7 +60,13 @@ def next_id(tasks):
 
 
 def add_task(tasks, title, tag=None):
-    """Add a new task and return it."""
+    """Add a new task and return it.
+
+    Raises ValueError if the title is empty or only whitespace.
+    """
+    title = title.strip() if title else ""
+    if not title:
+        raise ValueError("Task title cannot be empty.")
     task = {
         "id": next_id(tasks),
         "title": title,
@@ -127,10 +147,19 @@ def main(argv=None):
     sub.add_parser("stats", help="Show summary statistics")
 
     args = parser.parse_args(argv)
-    tasks = load_tasks()
+
+    try:
+        tasks = load_tasks()
+    except TaskTrackerError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
 
     if args.command == "add":
-        task = add_task(tasks, args.title, args.tag)
+        try:
+            task = add_task(tasks, args.title, args.tag)
+        except ValueError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
         save_tasks(tasks)
         print(f"Added task {task['id']}: {task['title']}")
     elif args.command == "list":
@@ -138,17 +167,19 @@ def main(argv=None):
             print(format_task(task))
     elif args.command == "done":
         task = complete_task(tasks, args.id)
-        save_tasks(tasks)
         if task:
+            save_tasks(tasks)
             print(f"Completed: {task['title']}")
         else:
-            print(f"No task with id {args.id}")
+            print(f"No task with id {args.id}", file=sys.stderr)
+            return 1
     elif args.command == "delete":
         if delete_task(tasks, args.id):
             save_tasks(tasks)
             print(f"Deleted task {args.id}")
         else:
-            print(f"No task with id {args.id}")
+            print(f"No task with id {args.id}", file=sys.stderr)
+            return 1
     elif args.command == "stats":
         s = stats(tasks)
         print(f"Total: {s['total']}  Open: {s['open']}  Done: {s['done']}")
